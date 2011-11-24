@@ -352,32 +352,40 @@ int UAP_from_header(packet *pkt, piconet *pnet)
 				retval = crc_check(clock, pkt);
 
 			// debugging with a particular UAP
-			//if (UAP == 0x61 || pnet->clock6_candidates[count] == 0x61)
-				//printf("%u: UAP %02x, %02x, type %u, clock %u, clkn %u, first %u, result %d\n", count, UAP, pnet->clock6_candidates[count], pkt->packet_type, clock, clkn, pnet->first_pkt_time, retval);
+			if (UAP == 0x37 || 
+				pnet->clock6_candidates[count] == 0x37)
+				printf("%u: UAP %02x, %02x, type %u, clock %u, clkn %u, first %u, result %d\n",
+					count,
+					UAP,
+					pnet->clock6_candidates[count],
+					pkt->packet_type,
+					clock,
+					clkn,
+					pnet->first_pkt_time,
+					retval);
 
 			switch(retval) {
+				case -1: /* UAP mismatch */
+				case 0: /* CRC failure */
+					pnet->clock6_candidates[count] = -1;
+					break;
 
-			case -1: /* UAP mismatch */
-			case 0: /* CRC failure */
-				pnet->clock6_candidates[count] = -1;
-				break;
+				case 1: /* inconclusive result */
+					pnet->clock6_candidates[count] = UAP;
+					/* remember this count because it may be the correct clock of the first packet */
+					first_clock = count;
+					remaining++;
+					break;
 
-			case 1: /* inconclusive result */
-				pnet->clock6_candidates[count] = UAP;
-				/* remember this count because it may be the correct clock of the first packet */
-				first_clock = count;
-				remaining++;
-				break;
-
-			default: /* CRC success */
-				printf("Correct CRC! UAP = 0x%x found after %d total packets.\n",
-						UAP, pnet->total_packets_observed);
-				pnet->clk_offset = (count - (pnet->first_pkt_time & 0x3f)) & 0x3f;
-				pnet->UAP = UAP;
-				pnet->have_clk6 = 1;
-				pnet->have_UAP = 1;
-				pnet->total_packets_observed = 0;
-				return 1;
+				default: /* CRC success */
+					printf("Correct CRC! UAP = 0x%x found after %d total packets.\n",
+							UAP, pnet->total_packets_observed);
+					pnet->clk_offset = (count - (pnet->first_pkt_time & 0x3f)) & 0x3f;
+					pnet->UAP = UAP;
+					pnet->have_clk6 = 1;
+					pnet->have_UAP = 1;
+					pnet->total_packets_observed = 0;
+					return 1;
 			}
 		}
 	}
@@ -429,6 +437,8 @@ void reset(piconet *pnet)
 	 * If we have recently observed two packets in a row on the same
 	 * channel, try AFH next time.  If not, don't.
 	 */
+	printf("Looks like it might be Adaptive Frequency Hopping--let's try that.\n");
+
 	pnet->afh = pnet->looks_like_afh;
 	pnet->looks_like_afh = 0;
 }

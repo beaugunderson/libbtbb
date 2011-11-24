@@ -104,7 +104,7 @@ uint64_t gen_syncword(int LAP)
 {
 	int i;
 	/* default codeword modified for PN sequence and barker code */
-	uint64_t codeword = 0xb0000002c7820e7e;
+	uint64_t codeword = 0xb0000002c7820e7eULL;
 	
 	/* the sync word generated is in host order, not air order */
 
@@ -226,7 +226,7 @@ int check_syncword(char *stream, uint64_t syncword)
 
 	/* correct the barker code with a simple comparison */
 	barker = barker_correct[(uint8_t)(streamword >> 57)];
-	streamword = (streamword & 0x01ffffffffffffff) | barker;
+	streamword = (streamword & 0x01ffffffffffffffULL) | barker;
 
 	//FIXME do error correction instead of detection
 	biterrors = count_bits(streamword ^ syncword);
