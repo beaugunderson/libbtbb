@@ -28,7 +28,7 @@ LIB_NAME = libbtbb.so
 SONAME   = $(LIB_NAME).0
 LIB_FILE = $(SONAME).1
 
-SOURCE_FILES = bluetooth_packet.c bluetooth_piconet.c
+SOURCE_FILES = bluetooth_packet.c bluetooth_piconet.c logging.c
 OBJECT_FILES = $(SOURCE_FILES:%.c=%.o)
 HEADER_FILES = $(SOURCE_FILES:%.c=%.h)
 

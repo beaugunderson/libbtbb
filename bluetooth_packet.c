@@ -25,7 +25,30 @@
 #include "config.h"
 #endif
 
+#include <inttypes.h>
+#include <string.h>
+
 #include "bluetooth_packet.h"
+
+void remove_colons(char *input) {
+	char *src, *dest;
+
+	src = dest = input;
+
+	while (*src != '\0')
+	{
+		if (*src != ':')
+		{
+			*dest = *src;
+
+			dest++;
+		}
+
+		src++;
+	}
+
+	*dest = '\0';
+}
 
 /*
  * Search a symbol stream to find a packet with arbitrary LAP, return index.
@@ -33,8 +56,8 @@
  */
 int sniff_ac(char *stream, int search_length)
 {
-	/* Find any/all LAPs (LAP = =-1) */
-	return find_ac(stream, search_length, -1);
+	/* Find any/all LAPs (LAP == 0xffffffff) */
+	return find_ac(stream, search_length, 0xffffffff);
 }
 
 /*
@@ -51,28 +74,40 @@ int find_ac(char *stream, int search_length, uint32_t LAP)
 	uint64_t syncword;
 	char *symbols;
 
-	if (LAP!=-1)
+	if (LAP != 0xffffffff) {
 		syncword = gen_syncword(LAP);
+
+		//printf("LAP = %06x\n", LAP);
+		//printf("syncword = %016" PRIx64 "\n", syncword);
+	}
 
 	barker = air_to_host8(&stream[61], 6);
 
 	// The stream length must be 72 symbols longer than search_length.
-	for(count = 0; count < search_length; count ++)
+	for (count = 0; count < search_length; count++)
 	{
 		symbols = &stream[count];
 		barker |= (symbols[67] << 6);
-		if(BARKER_DISTANCE[barker] <= max_distance)
+
+		if (BARKER_DISTANCE[barker] <= max_distance)
 		{
 			data_LAP = air_to_host32(&symbols[38], 24);
 
-			if (LAP == -1) 
+			if (LAP == 0xffffffff) {
 				syncword = gen_syncword(data_LAP);
 
-			if (check_syncword(&symbols[4], syncword))
+				//printf("data_LAP = %06x\n", data_LAP);
+				//printf("syncword = %016" PRIx64 "\n", syncword);
+			}
+
+			if (check_syncword(&symbols[4], syncword)) {
 				return count;
+			}
 		}
+
 		barker >>= 1;
 	}
+
 	return -1;
 }
 
@@ -80,9 +115,12 @@ void init_packet(packet *p, char *syms, int len)
 {
 	int i;
 
-	for (i = 0; i < len; i++)
+	for (i = 0; i < len; i++) {
 		p->symbols[i] = syms[i]; 
+	}
+
 	p->LAP = air_to_host32(&p->symbols[38], 24);
+
 	p->length = len;
 	p->whitened = 1;
 	p->have_UAP = 0;
@@ -91,12 +129,29 @@ void init_packet(packet *p, char *syms, int len)
 	p->have_clk27 = 0;
 	p->have_payload = 0;
 	p->payload_length = 0;
+
+	uint64_t bd_addr = BD_ADDR_from_env(p->LAP);
+	
+	if (bd_addr != -1) {
+		p->UAP = UAP_from_BD_ADDR(bd_addr);
+		p->have_UAP = 1;
+
+		p->NAP = NAP_from_BD_ADDR(bd_addr);
+		p->have_NAP = 1;
+	}
 }
 
 /* Reverse the bits in a byte */
 uint8_t reverse(char byte)
 {
-	return (byte & 0x80) >> 7 | (byte & 0x40) >> 5 | (byte & 0x20) >> 3 | (byte & 0x10) >> 1 | (byte & 0x08) << 1 | (byte & 0x04) << 3 | (byte & 0x02) << 5 | (byte & 0x01) << 7;
+	return (byte & 0x80) >> 7 |
+	 	(byte & 0x40) >> 5 |
+		(byte & 0x20) >> 3 |
+		(byte & 0x10) >> 1 |
+		(byte & 0x08) << 1 |
+		(byte & 0x04) << 3 |
+		(byte & 0x02) << 5 |
+		(byte & 0x01) << 7;
 }
 
 /* Generate Sync Word from an LAP */
@@ -107,11 +162,12 @@ uint64_t gen_syncword(int LAP)
 	uint64_t codeword = 0xb0000002c7820e7eULL;
 	
 	/* the sync word generated is in host order, not air order */
-
-	for (i = 0; i < 24; i++)
-		if (LAP & (0x800000 >> i))
+	for (i = 0; i < 24; i++) {
+		if (LAP & (0x800000 >> i)) {
 			codeword ^= sw_matrix[i];
-	
+		}
+	}
+
 	return codeword;
 }
 
@@ -125,8 +181,10 @@ int unfec13(char *input, char *output, int length)
 		a = 3 * i;
 		b = a + 1;
 		c = a + 2;
+
 		output[i] = ((input[a] & input[b]) | (input[b] & input[c]) |
 				(input[c] & input[a]));
+
 		be += ((input[a] ^ input[b]) | (input[b] ^ input[c]) |
 				(input[c] ^ input[a]));
 	}
@@ -141,9 +199,11 @@ uint16_t fec23(uint16_t data)
 	uint16_t codeword = 0;
 
 	/* host order, not air order */
-	for (i = 0; i < 10; i++)
-		if (data & (1 << i))
+	for (i = 0; i < 10; i++) {
+		if (data & (1 << i)) {
 			codeword ^= fec23_gen_matrix[i];
+		}
+	}
 
 	return codeword;
 }
@@ -161,15 +221,16 @@ char *unfec23(char *input, int length)
 
 	diff = length % 10;
 	// padding at end of data
-	if(0!=diff)
+	if (0!=diff)
 		length += (10 - diff);
 
 	output = (char *) malloc(length);
 
 	for (iptr = 0, optr = 0; optr<length; iptr += 15, optr += 10) {
 		// copy data to output
-		for(count=0;count<10;count++)
+		for (count=0;count<10;count++) {
 			output[optr+count] = input[iptr+count];
+		}
 
 		// grab data and error check in host format
 		data = air_to_host16(input+iptr, 10);
@@ -212,6 +273,7 @@ char *unfec23(char *input, int length)
 			}
 		}
 	}
+
 	return output;
 }
 
@@ -231,8 +293,9 @@ int check_syncword(char *stream, uint64_t syncword)
 	//FIXME do error correction instead of detection
 	biterrors = count_bits(streamword ^ syncword);
 
-	if (biterrors >= 5)
+	if (biterrors >= 5) {
 		return 0;
+	}
 
 	//if (biterrors)
 		//printf("POSSIBLE PACKET, LAP = %06x with %d errors\n", LAP, biterrors);
@@ -245,52 +308,70 @@ uint8_t air_to_host8(char *air_order, int bits)
 {
 	int i;
 	uint8_t host_order = 0;
-	for (i = 0; i < bits; i++)
+
+	for (i = 0; i < bits; i++) {
 		host_order |= ((uint8_t)air_order[i] << i);
+	}
+
 	return host_order;
 }
+
 uint16_t air_to_host16(char *air_order, int bits)
 {
 	int i;
 	uint16_t host_order = 0;
-	for (i = 0; i < bits; i++)
+
+	for (i = 0; i < bits; i++) {
 		host_order |= ((uint16_t)air_order[i] << i);
+	}
+
 	return host_order;
 }
+
 uint32_t air_to_host32(char *air_order, int bits)
 {
 	int i;
 	uint32_t host_order = 0;
-	for (i = 0; i < bits; i++)
+
+	for (i = 0; i < bits; i++) {
 		host_order |= ((uint32_t)air_order[i] << i);
+	}
+
 	return host_order;
 }
+
 uint64_t air_to_host64(char *air_order, int bits)
 {
 	int i;
 	uint64_t host_order = 0;
-	for (i = 0; i < bits; i++)
+
+	for (i = 0; i < bits; i++) {
 		host_order |= ((uint64_t)air_order[i] << i);
+	}
+
 	return host_order;
 }
 
 /* Convert some number of bits in a host order integer to an air order array */
 void host_to_air(uint8_t host_order, char *air_order, int bits)
 {
-    int i;
-    for (i = 0; i < bits; i++)
-        air_order[i] = (host_order >> i) & 0x01;
+	int i;
+
+	for (i = 0; i < bits; i++) {
+		air_order[i] = (host_order >> i) & 0x01;
+	}
 }
 
 /* Remove the whitening from an air order array */
 void unwhiten(char* input, char* output, int clock, int length, int skip, packet* p)
 {
 	int count, index;
+
 	index = INDICES[clock & 0x3f];
 	index += skip;
 	index %= 127;
 
-	for(count = 0; count < length; count++)
+	for (count = 0; count < length; count++)
 	{
 		/* unwhiten if whitened, otherwise just copy input to output */
 		output[count] = (p->whitened) ? input[count] ^ WHITENING_DATA[index] : input[count];
@@ -306,7 +387,8 @@ uint16_t crcgen(char *payload, int length, int UAP)
 	uint16_t reg, count;
 
 	reg = (reverse(UAP) << 8) & 0xff00;
-	for(count = 0; count < length; count++)
+
+	for (count = 0; count < length; count++)
 	{
 		byte = payload[count];
 
@@ -318,7 +400,83 @@ uint16_t crcgen(char *payload, int length, int UAP)
 		/*Bit 12*/
 		reg ^= ((reg & 0x8000)>>12);
 	}
+
 	return reg;
+}
+
+int validate_BD_ADDR(uint64_t bd_addr) {
+	if (bd_addr & 0xffff000000000000ULL) {
+		printf("Invalid BD_ADDR: %016" PRIx64 "\n", bd_addr);
+
+		return -1;
+	}
+
+	return 0;
+}
+
+uint16_t NAP_from_BD_ADDR(uint64_t bd_addr) {
+	validate_BD_ADDR(bd_addr);
+
+	return (bd_addr & 0xffff00000000ULL) >> 32;
+}
+
+uint16_t UAP_from_BD_ADDR(uint64_t bd_addr) {		
+	validate_BD_ADDR(bd_addr);
+
+	return (bd_addr & 0x0000ff000000ULL) >> 24;
+}
+
+uint32_t LAP_from_BD_ADDR(uint64_t bd_addr) {		
+	validate_BD_ADDR(bd_addr);
+
+	return bd_addr & 0x000000ffffffULL;
+}
+
+int BD_ADDR_from_env(uint32_t lap) {
+	char *bd_addrs = getenv("BBTB_BD_ADDRS");
+
+	if (bd_addrs == NULL) {
+		return -1;
+	}
+
+	//printf("UAP_MAPPINGS: %s\n", bd_addrs);
+
+	int length = strlen(bd_addrs);
+
+	char bd_addrs_copy[length + 1];
+
+	strcpy(bd_addrs_copy, bd_addrs);
+
+	char *bd_addr = strtok(bd_addrs_copy, ",");
+
+	while (bd_addr) {
+		//printf("\tMapping: %s\n", bd_addr);
+
+		remove_colons(bd_addr);
+
+		//printf("\tRemoved: %s\n", bd_addr);
+
+		uint64_t bd_addr = strtoll(bd_addr, NULL, 16);
+
+		//printf("\tLong: %012" PRIx64 "\n", a);
+
+		uint16_t tnap = NAP_from_BD_ADDR(bd_addr);
+		uint16_t tuap = UAP_from_BD_ADDR(bd_addr);
+		uint32_t tlap = LAP_from_BD_ADDR(bd_addr); 
+
+		//printf("\tSplit: %04x %02x %06x\n", tnap, tuap, tlap);
+		//printf("\tMapping: %06x == %012" PRIx64 "\n", lap, a);
+
+		if (lap == tlap) {
+			//printf("Found bd_addr: %06x == %012" PRIx64 "\n", lap, a);
+
+			return tuap;
+		}
+
+		bd_addr = strtok(NULL, ",");
+	}
+
+	return -1;
 }
 
 /* extract UAP by reversing the HEC computation */
@@ -328,11 +486,13 @@ int UAP_from_hec(uint16_t data, uint8_t hec)
 
         for (i = 9; i >= 0; i--) {
                 /* 0x65 is xor'd if MSB is 1, else 0x00 (which does nothing) */
-                if (hec & 0x80)
+                if (hec & 0x80) {
                         hec ^= 0x65;
+		}
 
                 hec = (hec << 1) | (((hec >> 7) ^ (data >> i)) & 0x01);
         }
+
         return reverse(hec);
 }
 
@@ -347,7 +507,7 @@ int crc_check(int clock, packet* p)
 	 */
 	int retval = 1;
 
-	switch(p->packet_type)
+	switch (p->packet_type)
 	{
 		case 2:/* FHS */
 			retval = fhs(clock, p);
@@ -421,74 +581,102 @@ int fhs(int clock, packet* p)
 
 	p->payload_length = 20;
 
-	if (size < p->payload_length * 12)
+	if (size < p->payload_length * 12) {
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, p->payload_length * 8);
-	if (!corrected)
+
+	if (!corrected) {
 		return 0;
+	}
 
 	/* try to unwhiten with known clock bits */
 	unwhiten(corrected, p->payload, clock, p->payload_length * 8, 18, p);
+
 	if (payload_crc(p)) {
 		free(corrected);
+
 		return 1000;
 	}
 
 	/* try all 32 possible X-input values instead */
 	for (clock = 32; clock < 64; clock++) {
 		unwhiten(corrected, p->payload, clock, p->payload_length * 8, 18, p);
+
 		if (payload_crc(p)) {
 			free(corrected);
+
 			return 1000;
 		}
 	}
 
 	/* failed to unwhiten */
 	free(corrected);
+
 	return 0;
 }
 
 /* decode payload header, return value indicates success */
 int decode_payload_header(char *stream, int clock, int header_bytes, int size, int fec, packet* p)
 {
-	if(header_bytes == 2)
+	if (header_bytes == 2)
 	{
-		if(size < 16)
+		if (size < 16) {
 			return 0; //FIXME should throw exception
-		if(fec) {
-			if(size < 30)
+		}
+
+		if (fec) {
+			if (size < 30) {
 				return 0; //FIXME should throw exception
+			}
+
 			char *corrected = unfec23(stream, 16);
-			if (!corrected)
+
+			if (!corrected) {
 				return 0;
+			}
+
 			unwhiten(corrected, p->payload_header, clock, 16, 18, p);
+
 			free(corrected);
 		} else {
 			unwhiten(stream, p->payload_header, clock, 16, 18, p);
 		}
+
 		/* payload length is payload body length + 2 bytes payload header + 2 bytes CRC */
 		p->payload_length = air_to_host16(&p->payload_header[3], 10) + 4;
 	} else {
-		if(size < 8)
+		if (size < 8) {
 			return 0; //FIXME should throw exception
-		if(fec) {
-			if(size < 15)
+		}
+
+		if (fec) {
+			if (size < 15) {
 				return 0; //FIXME should throw exception
+			}
+
 			char *corrected = unfec23(stream, 8);
-			if (!corrected)
+
+			if (!corrected) {
 				return 0;
+			}
+
 			unwhiten(corrected, p->payload_header, clock, 8, 18, p);
+
 			free(corrected);
 		} else {
 			unwhiten(stream, p->payload_header, clock, 8, 18, p);
 		}
+
 		/* payload length is payload body length + 1 byte payload header + 2 bytes CRC */
 		p->payload_length = air_to_host8(&p->payload_header[3], 5) + 3;
 	}
+
 	p->payload_llid = air_to_host8(&p->payload_header[0], 2);
 	p->payload_flow = air_to_host8(&p->payload_header[2], 1);
 	p->payload_header_length = header_bytes;
+
 	return 1;
 }
 
@@ -505,7 +693,7 @@ int DM(int clock, packet* p)
 	/* number of symbols remaining after access code and packet header */
 	int size = p->length - 126;
 
-	switch(p->packet_type)
+	switch (p->packet_type)
 	{
 		case(8): /* DV */
 			/* skip 80 voice bits, then treat the rest like a DM1 */
@@ -532,24 +720,36 @@ int DM(int clock, packet* p)
 		default: /* not a DM1/3/5 or DV */
 			return 0;
 	}
-	if(!decode_payload_header(stream, clock, header_bytes, size, 1, p))
+
+	if (!decode_payload_header(stream, clock, header_bytes, size, 1, p)) {
 		return 0;
+	}
+
 	/* check that the length indicated in the payload header is within spec */
-	if(p->payload_length > max_length)
+	if (p->payload_length > max_length) {
 		/* could be encrypted */
 		return 1;
+	}
+
 	bitlength = p->payload_length*8;
-	if(bitlength > size)
+
+	if (bitlength > size) {
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, bitlength);
-	if (!corrected)
+
+	if (!corrected) {
 		return 0;
+	}
+
 	unwhiten(corrected, p->payload, clock, bitlength, 18, p);
+
 	free(corrected);
 
-	if (payload_crc(p))
+	if (payload_crc(p)) {
 		return 10;
+	}
 
 	/* could be encrypted */
 	return 1;
@@ -569,7 +769,7 @@ int DH(int clock, packet* p)
 	/* number of symbols remaining after access code and packet header */
 	int size = p->length - 126;
 	
-	switch(p->packet_type)
+	switch (p->packet_type)
 	{
 		case(9): /* AUX1 */
 		case(4): /* DH1 */
@@ -585,14 +785,18 @@ int DH(int clock, packet* p)
 		default: /* not a DH1/3/5 */
 			return 0;
 	}
-	if(!decode_payload_header(stream, clock, header_bytes, size, 0, p))
+
+	if (!decode_payload_header(stream, clock, header_bytes, size, 0, p))
 		return 0;
+
 	/* check that the length indicated in the payload header is within spec */
-	if(p->payload_length > max_length)
+	if (p->payload_length > max_length)
 		/* could be encrypted */
 		return 1;
+
 	bitlength = p->payload_length*8;
-	if(bitlength > size)
+
+	if (bitlength > size)
 		return 1; //FIXME should throw exception
 
 	unwhiten(stream, p->payload, clock, bitlength, 18, p);
@@ -671,26 +875,34 @@ int EV4(int clock, packet* p)
 		/* unfec/unwhiten next block (15 symbols -> 10 bits) */
 		if (syms + 15 > size)
 			return 1; //FIXME should throw exception
+
 		corrected = unfec23(stream + syms, 10);
+
 		if (!corrected) {
 			free(corrected);
+
 			if (syms < minlength)
 				return 0;
 			else
 				return 1;
 		}
+
 		unwhiten(corrected, p->payload + bits, clock, 10, 18 + bits, p);
+
 		free(corrected);
 
 		/* check CRC one byte at a time */
 		while (p->payload_length * 8 <= bits) {
 			if (payload_crc(p))
 				return 10;
+
 			p->payload_length++;
 		}
+
 		syms += 15;
 		bits += 10;
 	}
+
 	return 1;
 }
 
@@ -733,42 +945,56 @@ int HV(int clock, packet* p)
 	/* number of symbols remaining after access code and packet header */
 	int size = p->length - 126;
 
-	if(size < 240) {
+	if (size < 240) {
 		p->payload_length = 0;
+
 		return 1; //FIXME should throw exception
 	}
 
 	switch (p->packet_type) {
-	case 5:/* HV1 */
-		{
-		char corrected[80];
-		if (!unfec13(stream, corrected, 80))
-			return 0;
-		p->payload_length = 10;
-		unwhiten(corrected, p->payload, clock, p->payload_length*8, 18, p);
-		}
-		break;
-	case 6:/* HV2 */
-		{
-		char *corrected = unfec23(stream, 160);
-		if (!corrected)
-			return 0;
-		p->payload_length = 20;
-		unwhiten(corrected, p->payload, clock, p->payload_length*8, 18, p);
-		free(corrected);
-		}
-		break;
-	case 7:/* HV3 */
-		p->payload_length = 30;
-		unwhiten(stream, p->payload, clock, p->payload_length*8, 18, p);
-		break;
+		case 5:/* HV1 */
+			{
+				char corrected[80];
+
+				if (!unfec13(stream, corrected, 80)) {
+					return 0;
+				}
+
+				p->payload_length = 10;
+
+				unwhiten(corrected, p->payload, clock, p->payload_length*8, 18, p);
+			}
+	
+			break;
+		case 6:/* HV2 */
+			{
+				char *corrected = unfec23(stream, 160);
+
+				if (!corrected) {
+					return 0;
+				}
+
+				p->payload_length = 20;
+
+				unwhiten(corrected, p->payload, clock, p->payload_length*8, 18, p);
+
+				free(corrected);
+			}
+
+			break;
+		case 7:/* HV3 */
+			p->payload_length = 30;
+
+			unwhiten(stream, p->payload, clock, p->payload_length*8, 18, p);
+
+			break;
 	}
 
 	return 1;
 }
+
 /* try a clock value (CLK1-6) to unwhiten packet header,
- * sets resultant p->packet_type and p->UAP, returns UAP.
- */
+ * sets resultant p->packet_type and p->UAP, returns UAP. */
 uint8_t try_clock(int clock, packet* p)
 {
 	/* skip 72 bit access code */
@@ -777,11 +1003,15 @@ uint8_t try_clock(int clock, packet* p)
 	char header[18];
 	char unwhitened[18];
 
-	if (!unfec13(stream, header, 18))
+	if (!unfec13(stream, header, 18)) {
 		return 0;
+	}
+
 	unwhiten(header, unwhitened, clock, 18, 0, p);
+
 	uint16_t hdr_data = air_to_host16(unwhitened, 10);
 	uint8_t hec = air_to_host8(&unwhitened[10], 8);
+
 	p->UAP = UAP_from_hec(hdr_data, hec);
 	p->packet_type = air_to_host8(&unwhitened[3], 4);
 
@@ -799,18 +1029,23 @@ int decode_header(packet* p)
 
 	if (p->have_clk6 && unfec13(stream, header, 18)) {
 		unwhiten(header, p->packet_header, p->clock, 18, 0, p);
+
 		uint16_t hdr_data = air_to_host16(p->packet_header, 10);
 		uint8_t hec = air_to_host8(&p->packet_header[10], 8);
+
 		UAP = UAP_from_hec(hdr_data, hec);
+
 		if (UAP == p->UAP) {
 			p->packet_type = air_to_host8(&p->packet_header[3], 4);
+
 			return 1;
 		} else {
-			printf("bad HEC! ");
+			printf("Bad HEC: UAP = %02x, p->UAP = %02x\n", UAP, p->UAP);
 		}
 	}
 	
-	printf("failed to decode header\n");
+	printf("Failed to decode header.\n");
+
 	return 0;
 }
 
@@ -818,7 +1053,7 @@ void decode_payload(packet* p)
 {
 	p->payload_header_length = 0;
 
-	switch(p->packet_type)
+	switch (p->packet_type)
 	{
 		case 0: /* NULL */
 			/* no payload to decode */
@@ -846,9 +1081,10 @@ void decode_payload(packet* p)
 			break;
 		case 7: /* HV3/EV3/3-EV3 */
 			/* decode as EV3 if CRC checks out */
-			if (EV3(p->clock, p) <= 1)
+			if (EV3(p->clock, p) <= 1) {
 				/* otherwise assume HV3 */
 				HV(p->clock, p);
+			}
 			/* don't know how to decode 3-EV3 */
 			break;
 		case 8: /* DV */
@@ -882,6 +1118,7 @@ void decode_payload(packet* p)
 			DH(p->clock, p);
 			break;
 	}
+
 	p->have_payload = 1;
 }
 
@@ -889,8 +1126,10 @@ void decode_payload(packet* p)
 void decode(packet* p)
 {
 	p->have_payload = 0;
-	if (decode_header(p))
+
+	if (decode_header(p)) {
 		decode_payload(p);
+	}
 }
 
 /* print packet information */
@@ -898,10 +1137,11 @@ void print(packet* p)
 {
 	if (p->have_payload) {
 		printf("%s\n", TYPE_NAMES[p->packet_type]);
+
 		if (p->payload_header_length > 0) {
-			printf("  LLID: %d\n", p->payload_llid);
-			printf("  flow: %d\n", p->payload_flow);
-			printf("  payload length: %d\n", p->payload_length);
+			printf("\tLLID: %d\n", p->payload_llid);
+			printf("\tFlow: %d\n", p->payload_flow);
+			printf("\tPayload length: %d\n", p->payload_length);
 		}
 	}
 }
@@ -929,8 +1169,9 @@ char *tun_format(packet* p)
 	/* HEC */
 	tun_format[8] = (char) air_to_host8(&p->packet_header[10], 8);
 
-	for(i=0;i<p->payload_length;i++)
+	for (i=0;i<p->payload_length;i++) {
 		tun_format[i+9] = (char) air_to_host8(&p->payload[i*8], 8);
+	}
 
 	return tun_format;
 }
@@ -960,11 +1201,13 @@ int header_present(packet* p)
 	int a, b, c;
 
 	/* check that we have enough symbols */
-	if (p->length < 126)
+	if (p->length < 126) {
 		return 0;
+	}
 
 	/* check that the AC trailer is correct */
 	msb = stream[0];
+
 	be += stream[1] ^ !msb;
 	be += stream[2] ^ msb;
 	be += stream[3] ^ !msb;
@@ -976,9 +1219,11 @@ int header_present(packet* p)
 	 * number of times three symbols in a row don't all agree.
 	 */
 	stream += 5;
+
 	for (a = 0; a < 54; a += 3) {
 		b = a + 1;
 		c = a + 2;
+
 		be += ((stream[a] ^ stream[b]) |
 			(stream[b] ^ stream[c]) | (stream[c] ^ stream[a]));
 	}
@@ -1026,8 +1271,11 @@ uint32_t clock_from_fhs(packet* p)
 /* count the number of 1 bits in a uint64_t */
 int count_bits(uint64_t n)
 {
-	int i = 0;
-	for (i = 0; n != 0; i++)
+	int i;
+
+	for (i = 0; n != 0; i++) {
 		n &= n - 1;
+	}
+
 	return i;
 }

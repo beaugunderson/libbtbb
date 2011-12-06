@@ -127,14 +127,14 @@ typedef struct packet {
 	/* Bluetooth channel */
 	uint8_t channel;
 
-	/* lower address part found in access code */
-	uint32_t LAP;
+	/* non-significant address part */
+	uint16_t NAP;
 	
 	/* upper address part */
 	uint8_t UAP;
 	
-	/* non-significant address part */
-	uint16_t NAP;
+	/* lower address part found in access code */
+	uint32_t LAP;
 	
 	/* number of symbols */
 	int length;
@@ -259,6 +259,14 @@ void host_to_air(uint8_t host_order, char *air_order, int bits);
 
 /* Create the 16bit CRC for packet payloads - input air order stream */
 uint16_t crcgen(char *payload, int length, int UAP);
+
+int validate_BD_ADDR(uint64_t bd_addr);
+
+uint16_t NAP_from_BD_ADDR(uint64_t bd_addr);
+uint16_t UAP_from_BD_ADDR(uint64_t bd_addr);
+uint32_t LAP_from_BD_ADDR(uint64_t bd_addr);
+
+int BD_ADDR_from_env(uint32_t lap);
 
 /* extract UAP by reversing the HEC computation */
 int UAP_from_hec(uint16_t data, uint8_t hec);
